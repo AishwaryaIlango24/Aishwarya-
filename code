@@ -1,0 +1,128 @@
+import geopy.distance
+import requests
+import time
+import math
+import random
+import numpy as np
+from datetime import datetime, timedelta
+
+# Replace with your ThingSpeak API key and the data you want to send
+api_key = 'HSVQUBXHFT54BK1V'
+
+# Kundrathur coordinates
+kundrathur_coords = (12.9790, 80.1064)
+
+# Chromepet coordinates
+chromepet_coords = (12.9518, 80.1415)
+
+# Bus stops along the path
+bus_stops = [
+    {"coords": (12.9790, 80.1064), "name": "Stop 1", "passenger_change": 10},
+    {"coords": (12.9720, 80.1100), "name": "Stop 2", "passenger_change": -5},
+    {"coords": (12.9680, 80.1165), "name": "Stop 3", "passenger_change": 15},
+    {"coords": (12.9650, 80.1200), "name": "Stop 4", "passenger_change": -8},
+    {"coords": (12.9620, 80.1250), "name": "Stop 5", "passenger_change": 12},
+    {"coords": (12.9600, 80.1280), "name": "Stop 6", "passenger_change": -7},
+    {"coords": (12.9580, 80.1320), "name": "Stop 7", "passenger_change": 20},
+    {"coords": (12.9550, 80.1350), "name": "Stop 8", "passenger_change": -10},
+    {"coords": (12.9520, 80.1390), "name": "Stop 9", "passenger_change": 8},
+    {"coords": (12.9490, 80.1420), "name": "Stop 10", "passenger_change": -12},
+]
+
+# Generate coordinates along the path
+def generate_path(start_coords, end_coords, num_points):
+    path = []
+    for i in range(num_points + 1):
+        fraction = i / num_points
+        lat = start_coords[0] + fraction * (end_coords[0] - start_coords[0])
+        lon = start_coords[1] + fraction * (end_coords[1] - start_coords[1])
+        path.append((lat, lon))
+    return path
+path_coords = generate_path(kundrathur_coords,chromepet_coords,100)
+# Generate a path with 100 points
+selected_stops = random.sample(path_coords, len(bus_stops))
+    
+# Calculate distances between consecutive points to simulate speed
+speed_values = [20]  # Initial speed
+for i in range(1, len(path_coords)):
+    distance_km = geopy.distance.distance(path_coords[i - 1], path_coords[i]).km
+    time_hours = distance_km / speed_values[-1]  # Assume constant speed
+    speed_values.append(distance_km / time_hours)
+
+# Calculate bearing and map to 8 directions
+def calculate_bearing(point1, point2):
+    lat1, lon1 = point1
+    lat2, lon2 = point2
+
+    delta_lon = lon2 - lon1
+    x = math.cos(math.radians(lat2)) * math.sin(math.radians(delta_lon))
+    y = math.cos(math.radians(lat1)) * math.sin(math.radians(lat2)) - \
+        math.sin(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.cos(math.radians(delta_lon))
+    
+    bearing = math.atan2(x, y)
+    bearing = math.degrees(bearing)
+    bearing = (bearing + 360) % 360  # Ensure bearing is between 0 and 360 degrees
+    
+    return bearing
+
+# Calculate bearings between consecutive points
+bearings = [calculate_bearing(path_coords[i - 1], path_coords[i]) for i in range(1, len(path_coords))]
+
+# Map bearings to 8 directions
+directions = []
+for bearing in bearings:
+    angle = bearing + 22.5  # Offset by half the angle to get more accurate direction
+    if angle < 0:
+        angle += 360
+    direction_index = int(angle / 45) % 8
+    direction = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"][direction_index]
+    directions.append(angle)
+
+# Extract latitude and longitude values
+latitude_values, longitude_values = zip(*path_coords)
+
+# Simulate passenger count and stops
+passenger_count = 0
+stop_interval = 5  # Time interval between bus stops in minutes
+update_interval = 30  # Update interval in seconds
+
+# Generate timestamps
+start_timestamp = datetime.now()
+timestamps = [start_timestamp + timedelta(seconds=i * update_interval) for i in range(len(speed_values))]
+
+# Display the first few values
+print("Latitude values:", latitude_values[:5])
+print("Longitude values:", longitude_values[:5])
+print("Speed values:", speed_values[:5])
+print("Directions:", directions[:5])
+
+for i in range(len(speed_values)):
+    data = {
+        'field1': str(latitude_values[i]),
+        'field2': str(longitude_values[i]),
+        'field3': str(max(0, speed_values[i] + 10 - random.uniform(2, 10))),  # Speed is non-negative
+        'field4': directions[i],
+        'field5': timestamps[i].strftime("%H.%M"),  # Format timestamp as string
+    }
+    print(timestamps[i].strftime("%H.%M"))
+
+    # Simulate stops
+    for stop,passenger in zip(selected_stops, bus_stops):
+        if stop == (latitude_values[i], longitude_values[i]):
+            print("bus stop")
+            passenger_count = max(0, passenger_count + passenger["passenger_change"])  # Ensure passenger count is non-negative
+            data['field6'] = str(passenger_count)
+            data['field3'] = '0'  # Speed is 0 at stops
+            print(f"Bus stopped at {passenger['name']}. Passenger count: {passenger_count}")
+
+    # Update ThingSpeak with a delay
+    time.sleep(update_interval)
+
+    # ThingSpeak update URL
+    url = f'https://api.thingspeak.com/update?api_key={api_key}'
+
+    response = requests.post(url, data=data)
+    if response.status_code == 200:
+        print("Data uploaded successfully to ThingSpeak")
+    else:
+        print("Failed to upload data")
